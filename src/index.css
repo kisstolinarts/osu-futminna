@@ -1,0 +1,140 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-slate-50 font-sans text-slate-700 antialiased;
+  }
+  ::selection {
+    @apply bg-fuchsia-200 text-fuchsia-950;
+  }
+}
+
+@layer components {
+  /* Layout helpers */
+  .container-x {
+    @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
+  }
+  .section-pad {
+    @apply py-14 sm:py-20;
+  }
+
+  /* Headings */
+  .eyebrow {
+    @apply inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-fuchsia-700;
+  }
+  .eyebrow::before {
+    content: '';
+    @apply inline-block h-px w-6 bg-fuchsia-500;
+  }
+  .eyebrow-light {
+    @apply text-fuchsia-200;
+  }
+  .eyebrow-light::before {
+    @apply bg-fuchsia-300;
+  }
+  .h-display {
+    @apply text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl lg:text-5xl;
+  }
+  .h-section {
+    @apply text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl;
+  }
+
+  /* Gradient text accent */
+  .text-grad {
+    background-image: linear-gradient(100deg, #d946ef 0%, #a21caf 45%, #7c3aed 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl font-semibold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fuchsia-600 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  .btn-lg {
+    @apply px-6 py-3.5 text-base;
+  }
+  .btn-md {
+    @apply px-5 py-2.5 text-sm;
+  }
+  .btn-primary {
+    @apply bg-fuchsia-700 text-white shadow-sm shadow-fuchsia-900/30 hover:bg-fuchsia-800;
+  }
+  .btn-white {
+    @apply bg-white text-fuchsia-900 shadow hover:bg-fuchsia-50;
+  }
+  .btn-outline {
+    @apply border border-slate-300 bg-white/70 text-slate-700 hover:border-fuchsia-400 hover:text-fuchsia-700;
+  }
+  .btn-ghost-light {
+    @apply border border-white/40 bg-white/5 text-white backdrop-blur hover:bg-white/15;
+  }
+
+  /* Cards + surfaces */
+  .card {
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-sm;
+  }
+  .chip {
+    @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold;
+  }
+
+  /* Forms */
+  .label {
+    @apply mb-1.5 block text-sm font-semibold text-slate-700;
+  }
+  .input {
+    @apply w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-slate-900 placeholder-slate-400 shadow-sm transition focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-200;
+  }
+  .hint {
+    @apply mt-1.5 text-xs text-slate-500;
+  }
+}
+
+/* Subtle entrance animation (respects reduced motion) */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-fade-up {
+  animation: fadeUp 0.6s ease-out both;
+}
+.animate-fade-in {
+  animation: fadeIn 0.25s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-fade-in {
+    animation: none;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* Slim scrollbars for lightbox-like scroll regions */
+.nice-scroll::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.nice-scroll::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-slate-300;
+}
