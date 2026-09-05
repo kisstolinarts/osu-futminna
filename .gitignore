@@ -2,6 +2,7 @@ node_modules/
 dist/
 server/uploads/
 uploads/
-data/
+/data/
 .env
 *.log
+DEPLOY-GUIDE.md
