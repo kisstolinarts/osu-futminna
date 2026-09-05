@@ -290,6 +290,19 @@ export async function migrate(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_gallery_images_album ON gallery_images(album_id);
 
+    -- Photo bytes live IN the cloud database so uploaded pictures survive
+    -- Render restarts (free Render disk is temporary). gallery_images holds
+    -- the metadata + display URL; this table holds the actual file bytes.
+    CREATE TABLE IF NOT EXISTS gallery_image_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      image_id INTEGER NOT NULL UNIQUE REFERENCES gallery_images(id) ON DELETE CASCADE,
+      content_type TEXT NOT NULL DEFAULT 'image/jpeg',
+      data BLOB NOT NULL,
+      size INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_gallery_image_files_image ON gallery_image_files(image_id);
+
     CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       actor_type TEXT NOT NULL DEFAULT 'admin'

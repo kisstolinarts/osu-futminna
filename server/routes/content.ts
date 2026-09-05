@@ -1,18 +1,16 @@
 import { Router } from 'express';
 import multer from 'multer';
-import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { prepare } from '../dbCloud';
+import { prepare, tx } from '../dbCloud';
 import { audit } from '../lib/audit';
 import { ah } from '../lib/asyncHandler';
 import { requireAdmin, requireRole } from '../middleware/auth';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Kept for the legacy static mount; new photo uploads are stored in the
+// database (gallery_image_files) so they survive server restarts.
 export const uploadsDir = path.resolve(__dirname, '..', 'uploads');
-const galleryDir = path.join(uploadsDir, 'gallery');
-fs.mkdirSync(galleryDir, { recursive: true });
 
 // ---------------------------------------------------------------------------
 // Helpers to read / write content_blocks (JSON-safe arrays stored as text)
@@ -79,6 +77,32 @@ publicContentRouter.get(
       events,
       galleryAlbums: Array.from(albumMap.values()),
     });
+  }),
+);
+
+// Stream an uploaded gallery photo straight from the database. Uploaded
+// pictures are stored as bytes in the cloud DB (gallery_image_files), so the
+// URL survives restarts — no dependency on the server's temporary disk.
+publicContentRouter.get(
+  '/gallery/files/:imageId',
+  ah(async (req, res) => {
+    const imageId = Number(req.params.imageId);
+    if (!Number.isInteger(imageId)) return res.status(400).json({ error: 'Invalid image id.' });
+    const file = (await prepare(
+      `SELECT data, content_type FROM gallery_image_files WHERE image_id = ?`,
+    ).get(imageId)) as { data: unknown; content_type: string } | undefined;
+    if (!file) return res.status(404).json({ error: 'Image not found.' });
+    const raw = file.data;
+    let buf: Buffer;
+    if (typeof Buffer !== 'undefined' && Buffer.isBuffer(raw)) buf = raw;
+    else if (raw instanceof Uint8Array) buf = Buffer.from(raw);
+    else if (raw instanceof ArrayBuffer) buf = Buffer.from(new Uint8Array(raw));
+    else if (typeof raw === 'string') buf = Buffer.from(raw, 'base64'); // legacy safety
+    else return res.status(500).json({ error: 'Image data unavailable.' });
+    res.setHeader('Content-Type', file.content_type || 'image/jpeg');
+    res.setHeader('Content-Length', buf.length);
+    res.setHeader('Cache-Control', 'public, max-age=604800');
+    res.send(buf);
   }),
 );
 
@@ -291,25 +315,24 @@ adminContentRouter.delete(
   requireRole('SUPER_ADMIN', 'CONTENT_ADMIN'),
   ah(async (req, res) => {
     const id = Number(req.params.id);
-    const imgs = (await prepare(`SELECT filename FROM gallery_images WHERE album_id = ?`).all(id)) as { filename: string }[];
-    for (const i of imgs) safeUnlink(i.filename);
-    await prepare(`DELETE FROM gallery_albums WHERE id = ?`).run(id);
+    await tx(async (t) => {
+      const imgs = (await t.execute({ sql: `SELECT id FROM gallery_images WHERE album_id = ?`, args: [id] })).rows as unknown as { id: number }[];
+      for (const im of imgs) {
+        await t.execute({ sql: `DELETE FROM gallery_image_files WHERE image_id = ?`, args: [im.id] });
+      }
+      await t.execute({ sql: `DELETE FROM gallery_images WHERE album_id = ?`, args: [id] });
+      await t.execute({ sql: `DELETE FROM gallery_albums WHERE id = ?`, args: [id] });
+    });
     const admin = (req as any).admin as { id: number; name: string };
     await audit({ actorType: 'admin', actorId: admin.id, actorLabel: admin.name, action: 'album_deleted', entityType: 'gallery_album', entityId: id, description: 'Deleted album' });
     res.json({ ok: true });
   }),
 );
 
-// Upload storage: local disk for now; swaps to object storage at launch.
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, galleryDir),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase().replace(/[^.a-z0-9]/g, '') || '.jpg';
-    cb(null, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`);
-  },
-});
+// Upload storage: file bytes are stored IN the cloud database
+// (gallery_image_files), so uploaded pictures survive server restarts.
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024 },
   fileFilter: (_req: any, file: any, cb: any) => {
     const ok = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.mimetype);
@@ -327,16 +350,27 @@ adminContentRouter.post(
     const album = await prepare(`SELECT id FROM gallery_albums WHERE id = ?`).get(albumId);
     if (!album) return res.status(404).json({ error: 'Album not found.' });
     const files = (req.files as Express.Multer.File[]) || [];
+    if (files.length === 0) return res.status(400).json({ error: 'No image files received.' });
     const caption = String((req.body as any)?.caption || '');
     const added: unknown[] = [];
-    for (const f of files) {
-      const info = await prepare(`INSERT INTO gallery_images (album_id, filename, caption) VALUES (?, ?, ?)`).run(
-        albumId,
-        `/uploads/gallery/${f.filename}`,
-        caption,
-      );
-      added.push(await prepare(`SELECT id, filename, caption FROM gallery_images WHERE id = ?`).get(info.lastInsertRowid));
-    }
+    await tx(async (t) => {
+      for (const f of files) {
+        const inserted = await t.execute({
+          sql: `INSERT INTO gallery_images (album_id, filename, caption) VALUES (?, '', ?)`,
+          args: [albumId, caption],
+        });
+        const imageId = Number(inserted.lastInsertRowid ?? 0);
+        const fileUrl = `/api/public/content/gallery/files/${imageId}`;
+        await t.execute({ sql: `UPDATE gallery_images SET filename = ? WHERE id = ?`, args: [fileUrl, imageId] });
+        const bytes = f.buffer instanceof Uint8Array ? f.buffer : new Uint8Array(f.buffer);
+        await t.execute({
+          sql: `INSERT INTO gallery_image_files (image_id, content_type, data, size) VALUES (?, ?, ?, ?)`,
+          args: [imageId, f.mimetype || 'image/jpeg', bytes, f.size],
+        });
+        const row = await t.execute({ sql: `SELECT id, filename, caption FROM gallery_images WHERE id = ?`, args: [imageId] });
+        added.push(row.rows[0]);
+      }
+    });
     const admin = (req as any).admin as { id: number; name: string };
     await audit({ actorType: 'admin', actorId: admin.id, actorLabel: admin.name, action: 'gallery_uploaded', entityType: 'gallery_album', entityId: albumId, description: `Uploaded ${added.length} image(s)` });
     res.status(201).json({ images: added });
@@ -350,20 +384,12 @@ adminContentRouter.delete(
     const id = Number(req.params.id);
     const img = (await prepare(`SELECT filename FROM gallery_images WHERE id = ?`).get(id)) as { filename: string } | undefined;
     if (!img) return res.status(404).json({ error: 'Image not found.' });
-    await prepare(`DELETE FROM gallery_images WHERE id = ?`).run(id);
-    safeUnlink(img.filename);
+    await tx(async (t) => {
+      await t.execute({ sql: `DELETE FROM gallery_image_files WHERE image_id = ?`, args: [id] });
+      await t.execute({ sql: `DELETE FROM gallery_images WHERE id = ?`, args: [id] });
+    });
     const admin = (req as any).admin as { id: number; name: string };
     await audit({ actorType: 'admin', actorId: admin.id, actorLabel: admin.name, action: 'gallery_image_deleted', entityType: 'gallery_image', entityId: id, description: 'Deleted image' });
     res.json({ ok: true });
   }),
 );
-
-function safeUnlink(urlPath: string) {
-  try {
-    // URL path like /uploads/gallery/xxx.jpg
-    const name = urlPath.replace(/^\/uploads\/gallery\//, '');
-    if (name && !name.includes('..')) fs.unlinkSync(path.join(galleryDir, name));
-  } catch {
-    /* ignore */
-  }
-}

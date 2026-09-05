@@ -231,7 +231,17 @@ importRouter.post(
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15000);
-      const response = await fetch(url, { signal: controller.signal, redirect: 'follow' });
+      const response = await fetch(url, {
+        signal: controller.signal,
+        redirect: 'follow',
+        headers: {
+          // Google's published-CSV endpoint serves an empty body to generic
+          // scripts; a normal browser User-Agent makes it return the data.
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+          Accept: 'text/csv,*/*;q=0.8',
+        },
+      });
       clearTimeout(timeout);
 
       if (!response.ok) {
