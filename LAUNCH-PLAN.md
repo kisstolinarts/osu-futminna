@@ -38,7 +38,15 @@ live Google Form list (still being gathered — import up to voting day is expec
 | Code pushed to GitHub `kisstolinarts/osu-futminna` | ✅ |
 | Deployed to Render (free) | ✅ |
 | Live web address | ✅ **https://osu-futminna.onrender.com** |
-| Load real members + real election | ⏳ next (before go-live) |
+| Gallery photos survive restarts | ✅ photos now stored in the cloud DB |
+| Load real members (Google Form wave 1) | ✅ **94 members imported — all PENDING** (voting rights only after WhatsApp confirmation) |
+| Load real election (positions/candidates/schedule) | ⏳ waiting on collator checklist |
+
+### Member import notes (wave 1 — 5 Sep 2026)
+- **94 unique members imported** as PENDING_VERIFICATION (correct — no voting rights until their phone number is confirmed on the union WhatsApp list).
+- 9 form rows were repeat submissions of the same students → auto-skipped as duplicates.
+- 2 members need a corrected matric number before they can be added: **jimoh Muhammed jamiu** (`200/1/85325vq` — looks like a typo for 2020…) and **Mashood khalid** (`Ubt252458` — not a readable FUTMinna format).
+- **Usman Anifat** imported with her recorded phone left exactly as submitted (per instruction — no fabrication; pending until the union confirms a working number).
 
 ## Remaining known limitation (free tier)
 Render free services sleep after ~15 min idle (wake takes ~1 min) and keep files only until a restart.
