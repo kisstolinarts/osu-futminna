@@ -1,4 +1,4 @@
-import { db } from '../db';
+import { prepare } from '../dbCloud';
 
 interface AuditInput {
   actorType: 'admin' | 'student' | 'system';
@@ -12,9 +12,9 @@ interface AuditInput {
 }
 
 /** Writes one row to the audit log. NEVER log ballot contents here. */
-export function audit(input: AuditInput) {
+export async function audit(input: AuditInput) {
   try {
-    db.prepare(
+    await prepare(
       `INSERT INTO audit_logs (actor_type, actor_id, actor_label, action, entity_type, entity_id, description, ip)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(

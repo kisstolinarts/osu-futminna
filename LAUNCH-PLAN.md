@@ -22,27 +22,40 @@ live Google Form list (still being gathered — import up to voting day is expec
 
 ---
 
-## ✅ Things ALREADY done
-- [x] Full app built & verified (site + student logins + admin + voting all work).
-- [x] Production single-server mode verified working locally.
-- [x] Students sign in with phone number first time, forced to create own password.
-- [x] Two extra admin accounts created (Electoral + Verification) with role limits.
-- [x] Google-Form import ready for members added right up to voting day.
-- [ ] **Data-layer rewiring to Turso (in progress)** — makes the app talk to a cloud database.
-- [ ] Security re-verification after the rewiring (one vote per position; anonymous sealed ballots).
-- [ ] Clean launch database (no demo data).
-- [ ] GitHub repo ready to deploy.
+## 🚦 Status — 2026-09-04 (election in 2 days)
 
-## 🖐️ YOUR TO-DOs (please start immediately — they run in parallel with my work)
-- [ ] **GitHub account** — sign up free at github.com (tell me your username or the repo name).
-- [ ] **Turso account** — sign up free at turso.tech; I will walk you through creating the database
-      and pasting me a connection string + token (safe to share — token only gives app DB access).
-- [ ] **Render account** — sign up free at render.com.
-- [ ] Final member list: publish the Google Form responses sheet as CSV (the way we did before) and
-      save that link — we'll import members into the live app with it.
-- [ ] Candidates: confirm real positions + candidates (you said they're ready) — we enter them in
-      the admin panel right before voting.
-- [ ] Exact voting **open** and **close** date/time for the app to lock automatically.
+| Milestone | State |
+|---|---|
+| Production build verified | ✅ done |
+| Phone-password + forced reset | ✅ done |
+| Extra admin accounts + roles | ✅ done |
+| **New cloud-ready database engine** | ✅ core built & proven in isolation (schema, migrations, transactions commit + roll back, unique/FK constraints) — not yet wired into the app |
+| Wire app to the new engine + full regression | 🔄 next (biggest remaining code step) |
+| Clean launch database (no demo data) | ⏳ after engine is wired |
+| GitHub repo ready to deploy | ⏳ needs your GitHub |
+| Turso cloud DB connected | ⏳ needs your Turso |
+| Deploy to Render | ⏳ needs your Render |
+| Load real members + real election | ⏳ last, before go-live |
+
+## 🖐️ YOUR TO-DOs — please do these TODAY in parallel with my work
+Each is free, no card needed. Stop after each step and tell me the values in bold.
+
+**1. GitHub (where the code lives)**
+1. Go to github.com → **Sign up** (free). Use any email; confirm the email.
+2. Once in, click the **+** (top right) → **New repository**.
+3. Name it `osu-futminna`, keep it **Private** or **Public** (either), do **NOT** tick any "Add a README" boxes (leave it empty), click **Create repository**.
+4. Tell me: **your GitHub username**, and the exact repo address shown on that page (ends in `…/osu-futminna.git`).
+
+**2. Turso (where the database lives)**
+1. Go to turso.tech → **Sign up** (free). GitHub sign-in is easiest.
+2. In the dashboard click **Create database** → name it `osu` → pick any region → **Create**.
+3. Open the database → copy the connection string that starts with `libsql://…turso.io` → tell me it.
+4. Click **Generate token** (scope: your new `osu` database) → copy the long token → tell me it.
+   (This token only lets the app talk to that one database — safe to share with me.)
+
+**3. Render (where the website runs)**
+1. Go to render.com → **Sign up** (free). Pick GitHub sign-in and connect your GitHub account when asked.
+2. You don't need to create anything yet — just confirm the account exists and tell me **the email you used**.
 
 ## 👨‍💻 MY NEXT STEPS (in order)
 1. Rewire the data layer so the app works against a local file (your computer) OR Turso (online),

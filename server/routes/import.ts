@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { db } from '../db';
+import { prepare, tx } from '../dbCloud';
 import { audit } from '../lib/audit';
+import { ah } from '../lib/asyncHandler';
 import { normalizeMatric, normalizePhone, toLocalMobile } from '../lib/normalize';
 import { requireAdmin, requireRole } from '../middleware/auth';
 
@@ -98,7 +99,7 @@ function normalizeLevel(raw: string | undefined): string {
   return v.slice(0, 40);
 }
 
-export function runImport(rows: string[][], admin: { id: number; name: string }): ImportOutcome {
+export async function runImport(rows: string[][], admin: { id: number; name: string }): Promise<ImportOutcome> {
   if (rows.length < 2) throw new Error('The file appears to be empty. Add a header row and at least one student.');
   const header = rows[0].map((c) => String(c).trim());
   const map = detectHeader(header);
@@ -107,19 +108,17 @@ export function runImport(rows: string[][], admin: { id: number; name: string })
   }
 
   const outcome: ImportOutcome = { created: 0, duplicates: 0, skipped: 0, rows: [] };
-  const insertStudent = db.prepare(
-    `INSERT INTO students (full_name, matric_number, email, phone_raw, phone_normalized, level, status, source, password_hash, must_change_password)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'import', ?, 1)`,
-  );
+
+  const insertSql = `INSERT INTO students (full_name, matric_number, email, phone_raw, phone_normalized, level, status, source, password_hash, must_change_password)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'import', ?, 1)`;
+  const findMatricSql = `SELECT id FROM students WHERE matric_number = ?`;
+  const findApprovedSql = `SELECT id FROM approved_whatsapp_numbers WHERE phone_normalized = ? AND active = 1`;
 
   // A student is only ACTIVE when their number is on the union's CONFIRMED
   // WhatsApp list (the group admins have verified it). A brand-new number is
   // held as PENDING_VERIFICATION until an admin confirms it belongs to the
   // WhatsApp group — a form response alone never grants voting rights.
-  const isApprovedPhone = (norm: string) =>
-    !!db.prepare(`SELECT id FROM approved_whatsapp_numbers WHERE phone_normalized = ? AND active = 1`).get(norm);
-
-  const transaction = db.transaction(() => {
+  await tx(async (t) => {
     for (let i = 1; i < rows.length; i++) {
       const cells = rows[i];
       const get = (field: keyof typeof map): string | undefined =>
@@ -154,8 +153,8 @@ export function runImport(rows: string[][], admin: { id: number; name: string })
       }
       result.matric = matric;
 
-      const existing = db.prepare(`SELECT id FROM students WHERE matric_number = ?`).get(matric);
-      if (existing) {
+      const existing = await t.execute({ sql: findMatricSql, args: [matric] });
+      if (existing.rows.length > 0) {
         result.reason = 'Already registered (duplicate matric).';
         outcome.duplicates++;
         outcome.rows.push(result);
@@ -174,7 +173,11 @@ export function runImport(rows: string[][], admin: { id: number; name: string })
         }
       }
 
-      const known = phoneNormalized !== null && isApprovedPhone(phoneNormalized);
+      let known = false;
+      if (phoneNormalized !== null) {
+        const approved = await t.execute({ sql: findApprovedSql, args: [phoneNormalized] });
+        known = approved.rows.length > 0;
+      }
       const status = known ? 'ACTIVE' : 'PENDING_VERIFICATION';
       if (!known) {
         phoneNote = phoneNote || ' (new number — pending WhatsApp confirmation)';
@@ -183,7 +186,10 @@ export function runImport(rows: string[][], admin: { id: number; name: string })
       // They are forced to set a new password on first login.
       const localMobile = toLocalMobile(phoneRaw || '') || (phoneNormalized ? toLocalMobile(phoneNormalized) : null);
       const pwHash = localMobile ? bcrypt.hashSync(localMobile, 10) : null;
-      insertStudent.run(name, matric, email, phoneRaw, phoneNormalized, level, status, pwHash);
+      await t.execute({
+        sql: insertSql,
+        args: [name, matric, email, phoneRaw, phoneNormalized, level, status, pwHash],
+      });
 
       result.ok = true;
       result.reason = phoneNote || undefined;
@@ -192,9 +198,7 @@ export function runImport(rows: string[][], admin: { id: number; name: string })
     }
   });
 
-  transaction();
-
-  audit({
+  await audit({
     actorType: 'admin', actorId: admin.id, actorLabel: admin.name,
     action: 'students_imported', entityType: 'import',
     description: `CSV import: ${outcome.created} created, ${outcome.duplicates} duplicates, ${outcome.skipped} skipped`,
@@ -204,8 +208,8 @@ export function runImport(rows: string[][], admin: { id: number; name: string })
   return outcome;
 }
 
-function getSetting(key: string): string {
-  const row = db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get(key) as { value: string } | undefined;
+async function getSetting(key: string): Promise<string> {
+  const row = (await prepare(`SELECT value FROM app_settings WHERE key = ?`).get(key)) as { value: string } | undefined;
   return row?.value ?? '';
 }
 
@@ -213,50 +217,55 @@ function getSetting(key: string): string {
 // Sync straight from the published Google Form responses sheet (CSV link
 // saved under the "sync_csv_url" setting). One click in the admin.
 // ---------------------------------------------------------------------------
-importRouter.post('/from-sheet', async (req, res) => {
-  const url = getSetting('sync_csv_url');
-  if (!url) {
-    return res.status(400).json({ error: 'No sync link saved yet. Open the Settings tab and paste your published Google Sheet CSV link.' });
-  }
-  if (!/^https:\/\/(docs\.google\.com\/spreadsheets|drive\.google\.com)\//.test(url)) {
-    return res.status(400).json({ error: 'The saved link does not look like a Google Sheets link.' });
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    const response = await fetch(url, { signal: controller.signal, redirect: 'follow' });
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      return res.status(502).json({
-        error: `Google returned status ${response.status}. Make sure the sheet is published as CSV (File → Share → Publish to web → choose the response sheet, format "Comma-separated values").`,
-      });
+importRouter.post(
+  '/from-sheet',
+  ah(async (req, res) => {
+    const url = await getSetting('sync_csv_url');
+    if (!url) {
+      return res.status(400).json({ error: 'No sync link saved yet. Open the Settings tab and paste your published Google Sheet CSV link.' });
     }
-    const text = await response.text();
-    const rows = parseCSV(text);
-    const admin = (req as any).admin as { id: number; name: string };
-    const outcome = runImport(rows, admin);
-    outcome.rows.forEach(() => undefined);
-    res.json(outcome);
-  } catch {
-    res.status(502).json({ error: 'Could not fetch the sheet. Check the link and your internet connection, then try again.' });
-  }
-});
+    if (!/^https:\/\/(docs\.google\.com\/spreadsheets|drive\.google\.com)\//.test(url)) {
+      return res.status(400).json({ error: 'The saved link does not look like a Google Sheets link.' });
+    }
 
-importRouter.post('/csv', (req, res) => {
-  try {
-    const { csv } = req.body ?? {};
-    if (!csv || typeof csv !== 'string') return res.status(400).json({ error: 'No CSV content received.' });
-    if (csv.length > 3_000_000) return res.status(400).json({ error: 'File too large (max ~3 MB).' });
-    const rows = parseCSV(csv);
-    const admin = (req as any).admin as { id: number; name: string };
-    const outcome = runImport(rows, admin);
-    res.json(outcome);
-  } catch (err) {
-    res.status(400).json({ error: err instanceof Error ? err.message : 'Import failed.' });
-  }
-});
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      const response = await fetch(url, { signal: controller.signal, redirect: 'follow' });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        return res.status(502).json({
+          error: `Google returned status ${response.status}. Make sure the sheet is published as CSV (File → Share → Publish to web → choose the response sheet, format "Comma-separated values").`,
+        });
+      }
+      const text = await response.text();
+      const rows = parseCSV(text);
+      const admin = (req as any).admin as { id: number; name: string };
+      const outcome = await runImport(rows, admin);
+      res.json(outcome);
+    } catch {
+      res.status(502).json({ error: 'Could not fetch the sheet. Check the link and your internet connection, then try again.' });
+    }
+  }),
+);
+
+importRouter.post(
+  '/csv',
+  ah(async (req, res) => {
+    try {
+      const { csv } = req.body ?? {};
+      if (!csv || typeof csv !== 'string') return res.status(400).json({ error: 'No CSV content received.' });
+      if (csv.length > 3_000_000) return res.status(400).json({ error: 'File too large (max ~3 MB).' });
+      const rows = parseCSV(csv);
+      const admin = (req as any).admin as { id: number; name: string };
+      const outcome = await runImport(rows, admin);
+      res.json(outcome);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Import failed.' });
+    }
+  }),
+);
 
 // A ready-to-fill template users can download.
 importRouter.get('/template', (_req, res) => {

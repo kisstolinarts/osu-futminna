@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config';
-import { db } from '../db';
+import { prepare } from '../dbCloud';
 import { ADMIN_COOKIE, STUDENT_COOKIE } from '../lib/cookies';
 
 export interface AdminPrincipal {
@@ -31,17 +31,22 @@ function parseToken(req: Request, cookieName: string): { sub: string; kind: stri
 }
 
 /** Requires a logged-in admin; attaches req.admin. */
-export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
   const payload = parseToken(req, ADMIN_COOKIE);
   if (!payload || payload.kind !== 'admin') {
     return res.status(401).json({ error: 'Admin authentication required.' });
   }
-  const admin = db
-    .prepare(`SELECT id, name, email, role FROM admins WHERE id = ?`)
-    .get(Number(payload.sub)) as AdminPrincipal | undefined;
-  if (!admin) return res.status(401).json({ error: 'Account no longer exists.' });
-  (req as any).admin = admin;
-  next();
+  try {
+    const admin = (await prepare(`SELECT id, name, email, role FROM admins WHERE id = ?`).get(
+      Number(payload.sub),
+    )) as AdminPrincipal | undefined;
+    if (!admin) return res.status(401).json({ error: 'Account no longer exists.' });
+    (req as any).admin = admin;
+    return next();
+  } catch (err) {
+    console.error('requireAdmin failed', err);
+    return res.status(500).json({ error: 'Server error while loading your account.' });
+  }
 }
 
 /** Role guard used after requireAdmin. */
@@ -56,18 +61,21 @@ export function requireRole(...roles: string[]) {
 }
 
 /** Requires a logged-in student; attaches req.student. */
-export function requireStudent(req: Request, res: Response, next: NextFunction) {
+export async function requireStudent(req: Request, res: Response, next: NextFunction) {
   const payload = parseToken(req, STUDENT_COOKIE);
   if (!payload || payload.kind !== 'student') {
     return res.status(401).json({ error: 'Student authentication required.' });
   }
-  const student = db
-    .prepare(
+  try {
+    const student = (await prepare(
       `SELECT id, full_name, matric_number, status, level, email, phone_raw, must_change_password, created_at
        FROM students WHERE id = ?`,
-    )
-    .get(Number(payload.sub)) as StudentPrincipal | undefined;
-  if (!student) return res.status(401).json({ error: 'Account no longer exists.' });
-  (req as any).student = student;
-  next();
+    ).get(Number(payload.sub))) as StudentPrincipal | undefined;
+    if (!student) return res.status(401).json({ error: 'Account no longer exists.' });
+    (req as any).student = student;
+    return next();
+  } catch (err) {
+    console.error('requireStudent failed', err);
+    return res.status(500).json({ error: 'Server error while loading your account.' });
+  }
 }

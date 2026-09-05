@@ -1,4 +1,4 @@
-import { db } from './db';
+import { prepare } from './dbCloud';
 
 /**
  * Seeds default editable content (About text, announcements, events, gallery)
@@ -92,38 +92,38 @@ const defaultAlbums = [
   { name: 'Our Community', images: [{ f: '/img/community.jpg', caption: 'Offa students, one union' }, { f: '/img/hero-students.jpg', caption: 'Together on campus' }] },
 ];
 
-export function seedContentDefaults() {
-  const blockCount = (db.prepare(`SELECT COUNT(*) n FROM content_blocks`).get() as { n: number }).n;
+export async function seedContentDefaults() {
+  const blockCount = Number(((await prepare(`SELECT COUNT(*) n FROM content_blocks`).get()) as any)?.n ?? 0);
   if (blockCount === 0) {
-    const insert = db.prepare(`INSERT INTO content_blocks (key, value) VALUES (?, ?)`);
-    for (const [k, v] of Object.entries(blocks)) insert.run(k, v);
+    const insert = prepare(`INSERT INTO content_blocks (key, value) VALUES (?, ?)`);
+    for (const [k, v] of Object.entries(blocks)) await insert.run(k, v);
     console.log('seeded content_blocks');
   }
 
-  const annCount = (db.prepare(`SELECT COUNT(*) n FROM announcements`).get() as { n: number }).n;
+  const annCount = Number(((await prepare(`SELECT COUNT(*) n FROM announcements`).get()) as any)?.n ?? 0);
   if (annCount === 0) {
-    const insert = db.prepare(
+    const insert = prepare(
       `INSERT INTO announcements (title, category, excerpt, body, author, date_label, image, published) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
     );
-    for (const a of defaultAnnouncements) insert.run(a.title, a.category, a.excerpt, a.body, a.author, a.date_label, a.published);
+    for (const a of defaultAnnouncements) await insert.run(a.title, a.category, a.excerpt, a.body, a.author, a.date_label, a.published);
     console.log('seeded announcements');
   }
 
-  const evCount = (db.prepare(`SELECT COUNT(*) n FROM events`).get() as { n: number }).n;
+  const evCount = Number(((await prepare(`SELECT COUNT(*) n FROM events`).get()) as any)?.n ?? 0);
   if (evCount === 0) {
-    const insert = db.prepare(`INSERT INTO events (title, date_label, time, venue, excerpt, status) VALUES (?, ?, ?, ?, ?, ?)`);
-    for (const e of defaultEvents) insert.run(e.title, e.date_label, e.time, e.venue, e.excerpt, e.status);
+    const insert = prepare(`INSERT INTO events (title, date_label, time, venue, excerpt, status) VALUES (?, ?, ?, ?, ?, ?)`);
+    for (const e of defaultEvents) await insert.run(e.title, e.date_label, e.time, e.venue, e.excerpt, e.status);
     console.log('seeded events');
   }
 
-  const albCount = (db.prepare(`SELECT COUNT(*) n FROM gallery_albums`).get() as { n: number }).n;
+  const albCount = Number(((await prepare(`SELECT COUNT(*) n FROM gallery_albums`).get()) as any)?.n ?? 0);
   if (albCount === 0) {
-    const insAlb = db.prepare(`INSERT INTO gallery_albums (name, description) VALUES (?, '')`);
-    const insImg = db.prepare(`INSERT INTO gallery_images (album_id, filename, caption) VALUES (?, ?, ?)`);
+    const insAlb = prepare(`INSERT INTO gallery_albums (name, description) VALUES (?, '')`);
+    const insImg = prepare(`INSERT INTO gallery_images (album_id, filename, caption) VALUES (?, ?, ?)`);
     for (const a of defaultAlbums) {
-      const info = insAlb.run(a.name);
+      const info = await insAlb.run(a.name);
       const aid = Number(info.lastInsertRowid);
-      for (const img of a.images) insImg.run(aid, img.f, img.caption);
+      for (const img of a.images) await insImg.run(aid, img.f, img.caption);
     }
     console.log('seeded gallery');
   }

@@ -13,6 +13,7 @@
  * isolation first, then the route files are switched over file by file.
  */
 
+import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,7 +60,7 @@ function toArgs(args: unknown[]): InArgs {
     const obj = args[0] as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(obj)) out[k.replace(/^[@:$]/, '')] = v ?? null;
-    return out;
+    return out as InArgs;
   }
   return args.map((a) => (a === undefined ? null : a)) as InArgs;
 }
@@ -69,7 +70,7 @@ function toStatement(stmtOrSql: string): { sql: string; execute: (args: InArgs) 
     sql: stmtOrSql,
     execute: async (args: InArgs) => {
       const r = await cloud.execute({ sql: stmtOrSql, args });
-      const last = typeof r.lastInsertRowid === 'bigint' ? Number(r.lastInsertRowid) : r.lastInsertRowid;
+      const last = typeof r.lastInsertRowid === 'bigint' ? Number(r.lastInsertRowid) : (r.lastInsertRowid ?? 0);
       return { changes: r.rowsAffected, lastInsertRowid: last };
     },
   };

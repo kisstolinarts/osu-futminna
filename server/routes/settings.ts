@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import { db } from '../db';
+import { prepare } from '../dbCloud';
 import { audit } from '../lib/audit';
+import { ah } from '../lib/asyncHandler';
 import { requireAdmin, requireRole } from '../middleware/auth';
 
 // ---------------------------------------------------------------------------
@@ -9,38 +10,48 @@ import { requireAdmin, requireRole } from '../middleware/auth';
 // ---------------------------------------------------------------------------
 const ALLOWED_KEYS = ['join_form_url', 'responses_sheet_url', 'sync_csv_url'] as const;
 
-function getSettings(): Record<string, string> {
-  const rows = db.prepare(`SELECT key, value FROM app_settings`).all() as { key: string; value: string }[];
+async function getSettings(): Promise<Record<string, string>> {
+  const rows = (await prepare(`SELECT key, value FROM app_settings`).all()) as { key: string; value: string }[];
   return Object.fromEntries(rows.map((r) => [r.key, r.value]));
 }
 
 export const settingsRouter = Router();
 settingsRouter.use(requireAdmin);
 
-settingsRouter.get('/', (_req, res) => {
-  res.json({ settings: getSettings() });
-});
+settingsRouter.get(
+  '/',
+  ah(async (_req, res) => {
+    res.json({ settings: await getSettings() });
+  }),
+);
 
-settingsRouter.put('/', requireRole('SUPER_ADMIN', 'CONTENT_ADMIN'), (req, res) => {
-  const { settings } = req.body ?? {};
-  if (!Array.isArray(settings)) return res.status(400).json({ error: 'Invalid settings payload.' });
+settingsRouter.put(
+  '/',
+  requireRole('SUPER_ADMIN', 'CONTENT_ADMIN'),
+  ah(async (req, res) => {
+    const { settings } = req.body ?? {};
+    if (!Array.isArray(settings)) return res.status(400).json({ error: 'Invalid settings payload.' });
 
-  const upsert = db.prepare(
-    `INSERT INTO app_settings (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
-  );
-  for (const item of settings) {
-    if (!item || !(ALLOWED_KEYS as readonly string[]).includes(item.key)) continue;
-    upsert.run(item.key, String(item.value ?? '').trim());
-  }
-  const admin = (req as any).admin as { id: number; name: string };
-  audit({ actorType: 'admin', actorId: admin.id, actorLabel: admin.name, action: 'settings_updated', description: 'Updated OSU form/sheet links' });
-  res.json({ ok: true, settings: getSettings() });
-});
+    const upsert = prepare(
+      `INSERT INTO app_settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+    );
+    for (const item of settings) {
+      if (!item || !(ALLOWED_KEYS as readonly string[]).includes(item.key)) continue;
+      await upsert.run(item.key, String(item.value ?? '').trim());
+    }
+    const admin = (req as any).admin as { id: number; name: string };
+    await audit({ actorType: 'admin', actorId: admin.id, actorLabel: admin.name, action: 'settings_updated', description: 'Updated OSU form/sheet links' });
+    res.json({ ok: true, settings: await getSettings() });
+  }),
+);
 
 /** Public-safe settings (no secrets). */
 export const publicConfigRouter = Router();
-publicConfigRouter.get('/', (_req, res) => {
-  const s = getSettings();
-  res.json({ join_form_url: s.join_form_url || '', enabled: !!s.join_form_url });
-});
+publicConfigRouter.get(
+  '/',
+  ah(async (_req, res) => {
+    const s = await getSettings();
+    res.json({ join_form_url: s.join_form_url || '', enabled: !!s.join_form_url });
+  }),
+);

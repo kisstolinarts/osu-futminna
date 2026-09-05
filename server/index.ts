@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cookieParser from 'cookie-parser';
-import { migrate } from './db';
+import { migrate } from './dbCloud';
 import { config } from './config';
 import { adminAuthRouter } from './routes/adminAuth';
 import { adminStudentsRouter } from './routes/students';
@@ -17,9 +17,6 @@ import { publicContentRouter, adminContentRouter, uploadsDir } from './routes/co
 import { seedContentDefaults } from './seedContent';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-migrate();
-seedContentDefaults();
 
 const app = express();
 app.disable('x-powered-by');
@@ -63,6 +60,30 @@ if (fs.existsSync(distDir)) {
   app.get('*', (_req, res) => res.sendFile(path.join(distDir, 'index.html')));
 }
 
-app.listen(config.port, '0.0.0.0', () => {
-  console.log(`OSU API listening on http://0.0.0.0:${config.port}`);
+// ---------------------------------------------------------------------------
+// Central error handler — turns unexpected errors (and async handler
+// rejections routed through ah()) into a clean JSON response.
+// ---------------------------------------------------------------------------
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('request error', err);
+  if (res.headersSent) return;
+  // Friendly messages for file-upload limits (multer).
+  if (err?.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'Image is too large (max 8 MB).' });
+  if (err && /allowed/i.test(String(err.message)) && err.message.includes('image')) {
+    return res.status(400).json({ error: String(err.message) });
+  }
+  res.status(500).json({ error: 'Unexpected server error. Please try again.' });
+});
+
+async function main() {
+  await migrate();
+  await seedContentDefaults();
+  app.listen(config.port, '0.0.0.0', () => {
+    console.log(`OSU API listening on http://0.0.0.0:${config.port}`);
+  });
+}
+
+main().catch((err) => {
+  console.error('Fatal startup error', err);
+  process.exit(1);
 });
