@@ -15,6 +15,9 @@ const loginLimiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
+  // Only failed attempts count toward the limit, so genuine students who log
+  // in successfully are never penalised (and the block stays on wrong guesses).
+  skipSuccessfulRequests: true,
   message: { error: 'Too many attempts. Please wait 15 minutes and try again.' },
 });
 

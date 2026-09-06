@@ -14,6 +14,9 @@ const loginLimiter = rateLimit({
   max: 15,
   standardHeaders: true,
   legacyHeaders: false,
+  // Only failed attempts count, so legitimate admins aren't locked out and
+  // the block stays on repeated wrong passwords.
+  skipSuccessfulRequests: true,
   message: { error: 'Too many login attempts. Please wait 15 minutes and try again.' },
 });
 

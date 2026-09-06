@@ -20,6 +20,11 @@ import { refreshElectionStatuses } from './lib/electionStatus';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
+// Render (and most hosts) sit behind a proxy. Without this, every request
+// looks like it comes from one IP, so a shared login limiter would lock out
+// ALL users after a few attempts. With it, each real visitor is counted
+// separately by the rate limiter.
+app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use(express.json({ limit: '4mb' }));
 app.use(cookieParser());
