@@ -17,6 +17,9 @@ interface Student {
   created_at: string;
 }
 
+const LEVEL_CHOICES = ['100 LEVEL', '200 LEVEL', '300 LEVEL', '400 LEVEL', '500 LEVEL', '600 LEVEL', 'POSTGRADUATE'];
+const levelLabel = (lv: string | null) => (lv ? String(lv).replace(' LEVEL', '').toLowerCase() : '—');
+
 export default function Students() {
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
@@ -24,6 +27,16 @@ export default function Students() {
   const [status, setStatus] = useState('ALL');
   const [message, setMessage] = useState('');
   const [notice, setNotice] = useState('');
+
+  // Per-member level editing
+  const [editId, setEditId] = useState<number | null>(null);
+  const [draftLevel, setDraftLevel] = useState<string>('');
+
+  // Bulk level advance
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkFrom, setBulkFrom] = useState('');
+  const [bulkTo, setBulkTo] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -53,6 +66,48 @@ export default function Students() {
       load();
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Update failed.');
+    }
+  };
+
+  const startEditLevel = (s: Student) => {
+    setEditId(s.id);
+    setDraftLevel(LEVEL_CHOICES.includes(String(s.level)) ? String(s.level) : '');
+  };
+
+  const saveLevel = async () => {
+    if (editId === null) return;
+    try {
+      await api(`/api/admin/${editId}`, { method: 'PATCH', body: JSON.stringify({ level: draftLevel }) });
+      setNotice(`Level updated.`);
+      setEditId(null);
+      load();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Update failed.');
+    }
+  };
+
+  const runBulkAdvance = async () => {
+    if (!bulkFrom || !bulkTo) {
+      alert('Choose both the level to move from and the level to move to.');
+      return;
+    }
+    if (!confirm(`Move every ${bulkFrom} student to ${bulkTo}? This changes all members currently listed as ${bulkFrom}.`)) return;
+    setBulkBusy(true);
+    setNotice('');
+    try {
+      const res = await api<{ updated: number }>('/api/admin/level-actions/advance', {
+        method: 'POST',
+        body: JSON.stringify({ from: bulkFrom, to: bulkTo }),
+      });
+      setNotice(`Done — ${res.updated} student(s) moved from ${bulkFrom} to ${bulkTo}.`);
+      setBulkOpen(false);
+      setBulkFrom('');
+      setBulkTo('');
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Advance failed.');
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -125,6 +180,9 @@ export default function Students() {
               <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
             ))}
           </select>
+          <button className="btn btn-md btn-outline" onClick={() => setBulkOpen((v) => !v)}>
+            {bulkOpen ? 'Close advance' : 'Advance whole level'}
+          </button>
           {!loading && (
             <button className="btn btn-md btn-outline" onClick={setMissing} disabled={missingCount === 0}>
               Set phone passwords ({missingCount} missing)
@@ -133,6 +191,40 @@ export default function Students() {
         </div>
       </div>
 
+      {bulkOpen && (
+        <div className="rounded-2xl border border-fuchsia-200 bg-fuchsia-50 p-4">
+          <h4 className="font-bold text-slate-900">Advance a whole level (e.g. new session roll-over)</h4>
+          <p className="mt-1 text-xs text-slate-600">
+            Moves every member currently on one level to another level you choose. People with no level set are never touched.
+            You can still fix individuals afterwards with the pencil beside each member's level.
+          </p>
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <div>
+              <label className="label !mb-1">Move all at</label>
+              <select className="input" value={bulkFrom} onChange={(e) => setBulkFrom(e.target.value)}>
+                <option value="">— choose level —</option>
+                {LEVEL_CHOICES.map((lv) => (
+                  <option key={lv} value={lv}>{levelLabel(lv)}</option>
+                ))}
+              </select>
+            </div>
+            <div className="pb-1 text-lg text-slate-400">→</div>
+            <div>
+              <label className="label !mb-1">to</label>
+              <select className="input" value={bulkTo} onChange={(e) => setBulkTo(e.target.value)} disabled={!bulkFrom}>
+                <option value="">— choose level —</option>
+                {LEVEL_CHOICES.filter((lv) => lv !== bulkFrom).map((lv) => (
+                  <option key={lv} value={lv}>{levelLabel(lv)}</option>
+                ))}
+              </select>
+            </div>
+            <button className="btn btn-md btn-primary" onClick={runBulkAdvance} disabled={bulkBusy || !bulkFrom || !bulkTo}>
+              {bulkBusy ? 'Advancing…' : 'Advance level'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {message && <p className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{message}</p>}
       {notice && (
         <p className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>
@@ -140,12 +232,12 @@ export default function Students() {
 
       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-600">
         <strong>How students get in:</strong> every student’s first-time password is their <strong>phone number</strong> as
-        written on the OSU form. The app forces them to create their own password on first login. Use <em>Reset to phone</em>{" "}
-        whenever a student forgets their password. No invite links needed.
+        written on the OSU form. The app forces them to create their own password on first login. Use <em>Reset to phone</em>{' '}
+        whenever a student forgets their password. No invite links needed. Level changes made here are recorded in the audit log.
       </div>
 
       <div className="card overflow-x-auto">
-        <table className="w-full min-w-[820px] text-left text-sm">
+        <table className="w-full min-w-[860px] text-left text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-xs uppercase tracking-wider text-slate-400">
               <th className="px-4 py-3">Student</th>
@@ -169,7 +261,36 @@ export default function Students() {
                   <p className="font-bold text-slate-900">{s.full_name}</p>
                   <p className="font-mono text-xs text-slate-400">{s.matric_number}</p>
                 </td>
-                <td className="px-4 py-3 text-slate-600">{s.level || '—'}</td>
+                <td className="px-4 py-3">
+                  {editId === s.id ? (
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs"
+                        value={draftLevel}
+                        onChange={(e) => setDraftLevel(e.target.value)}
+                        autoFocus
+                      >
+                        <option value="">— none / not set —</option>
+                        {LEVEL_CHOICES.map((lv) => (
+                          <option key={lv} value={lv}>{levelLabel(lv)}</option>
+                        ))}
+                      </select>
+                      <button className="btn btn-sm btn-primary" onClick={saveLevel}>Save</button>
+                      <button className="btn btn-sm btn-ghost" onClick={() => setEditId(null)}>Cancel</button>
+                    </div>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 text-slate-600">
+                      <span className="capitalize">{levelLabel(s.level)}</span>
+                      <button
+                        className="text-fuchsia-700 hover:text-fuchsia-900"
+                        title="Edit level"
+                        onClick={() => startEditLevel(s)}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                      </button>
+                    </span>
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   <p className="text-xs text-slate-500">{s.email || '—'}</p>
                   <p className="font-mono text-xs text-slate-400">{s.phone_raw || s.phone_normalized || '—'}</p>

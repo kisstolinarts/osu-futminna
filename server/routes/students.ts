@@ -69,32 +69,79 @@ adminStudentsRouter.get(
 );
 
 // ---------------------------------------------------------------------------
-// Update a single student's status (verification / eligibility changes).
-// ---------------------------------------------------------------------------
 const ALLOWED_STATUSES = ['ACTIVE', 'GRADUATED', 'SUSPENDED', 'INELIGIBLE', 'REJECTED', 'PENDING_VERIFICATION'];
+const LEVEL_CHOICES = ['100 LEVEL', '200 LEVEL', '300 LEVEL', '400 LEVEL', '500 LEVEL', '600 LEVEL', 'POSTGRADUATE'];
 
+// ---------------------------------------------------------------------------
+// Update a single student's record — status (verification / eligibility)
+// and/or current level (as members progress through school).
+// ---------------------------------------------------------------------------
 adminStudentsRouter.patch(
   '/:id',
   requireRole('SUPER_ADMIN', 'VERIFICATION_ADMIN', 'ELECTORAL_ADMIN'),
   ah(async (req, res) => {
     const id = Number(req.params.id);
-    const { status } = req.body ?? {};
-    if (!ALLOWED_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status value.' });
+    const { status, level } = req.body ?? {};
 
-    const existing = (await prepare(`SELECT full_name, matric_number, status FROM students WHERE id = ?`).get(id)) as
-      | { full_name: string; matric_number: string; status: string }
+    const existing = (await prepare(`SELECT full_name, matric_number, status, level FROM students WHERE id = ?`).get(id)) as
+      | { full_name: string; matric_number: string; status: string; level: string | null }
       | undefined;
     if (!existing) return res.status(404).json({ error: 'Student not found.' });
 
-    await prepare(`UPDATE students SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(status, id);
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    const notes: string[] = [];
+    if (status !== undefined) {
+      if (!ALLOWED_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status value.' });
+      sets.push('status = ?'); vals.push(status);
+      notes.push(`status ${existing.status} → ${status}`);
+    }
+    if (level !== undefined) {
+      const newLevel = level === '' || level === null ? '' : String(level);
+      if (newLevel !== '' && !LEVEL_CHOICES.includes(newLevel)) return res.status(400).json({ error: 'Invalid level value.' });
+      const storedLevel = newLevel || 'Not provided';
+      sets.push('level = ?'); vals.push(storedLevel);
+      notes.push(`level ${existing.level || '—'} → ${storedLevel}`);
+    }
+    if (sets.length === 0) return res.status(400).json({ error: 'Nothing to update. Send status and/or level.' });
+
+    sets.push("updated_at = datetime('now')");
+    await prepare(`UPDATE students SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
     const admin = (req as any).admin as { id: number; name: string };
     await audit({
       actorType: 'admin', actorId: admin.id, actorLabel: admin.name,
-      action: 'student_status_change', entityType: 'student', entityId: id,
-      description: `${existing.matric_number} (${existing.full_name}): ${existing.status} → ${status}`,
+      action: 'student_record_change', entityType: 'student', entityId: id,
+      description: `${existing.matric_number} (${existing.full_name}): ${notes.join('; ')}`,
       ip: req.ip,
     });
-    res.json({ ok: true, status });
+    res.json({ ok: true, status, level });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Bulk: advance everyone on one level to another (e.g. yearly roll-over:
+// move every 200 LEVEL student to 300 LEVEL).
+// ---------------------------------------------------------------------------
+adminStudentsRouter.post(
+  '/level-actions/advance',
+  requireRole('SUPER_ADMIN', 'VERIFICATION_ADMIN'),
+  ah(async (req, res) => {
+    const { from, to } = req.body ?? {};
+    const fromLv = String(from ?? '').trim();
+    const toLv = String(to ?? '').trim();
+    if (!LEVEL_CHOICES.includes(fromLv)) return res.status(400).json({ error: 'Please choose the level to advance from.' });
+    if (!LEVEL_CHOICES.includes(toLv)) return res.status(400).json({ error: 'Please choose the level to advance to.' });
+    if (fromLv === toLv) return res.status(400).json({ error: 'Choose two different levels.' });
+
+    const upd = await prepare(`UPDATE students SET level = ?, updated_at = datetime('now') WHERE level = ?`).run(toLv, fromLv);
+    const admin = (req as any).admin as { id: number; name: string };
+    await audit({
+      actorType: 'admin', actorId: admin.id, actorLabel: admin.name,
+      action: 'levels_bulk_advance', entityType: 'students',
+      description: `Bulk level change: ${upd.changes} student(s) moved ${fromLv} → ${toLv}`,
+      ip: req.ip,
+    });
+    res.json({ ok: true, from: fromLv, to: toLv, updated: upd.changes });
   }),
 );
 
