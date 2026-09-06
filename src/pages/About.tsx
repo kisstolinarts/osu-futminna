@@ -8,6 +8,8 @@ export default function About() {
   const { content } = useContent();
   const about = content.about;
   const objectives = about.objectives.length > 0 ? about.objectives : [''];
+  const aboutPhoto = content.site?.home_about_image || communityImg;
+  const historyPhoto = content.site?.about_history_image || culturalImg;
 
   return (
     <>
@@ -27,7 +29,7 @@ export default function About() {
             </div>
           </div>
           <div className="overflow-hidden rounded-3xl shadow-soft">
-            <img src={communityImg} alt="OSU FUTMinna members" className="aspect-[4/3] w-full object-cover" />
+            <img src={aboutPhoto} alt="OSU FUTMinna members" className="aspect-[4/3] w-full object-cover" />
           </div>
         </div>
       </section>
@@ -36,7 +38,7 @@ export default function About() {
       <section className="bg-white py-16 sm:py-20">
         <div className="container-x grid items-center gap-10 lg:grid-cols-2 lg:gap-16">
           <div className="order-2 overflow-hidden rounded-3xl shadow-soft lg:order-1">
-            <img src={culturalImg} alt="Offa culture and tradition" className="aspect-[4/3] w-full object-cover" />
+            <img src={historyPhoto} alt="Offa culture and tradition" className="aspect-[4/3] w-full object-cover" />
           </div>
           <div className="order-1 lg:order-2">
             <SectionHeading

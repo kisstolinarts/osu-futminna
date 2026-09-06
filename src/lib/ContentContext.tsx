@@ -13,6 +13,10 @@ export interface SiteBlock {
   email: string;
   address: string;
   whatsapp_text: string;
+  // Layout photo slots (editable from Content → Site).
+  home_hero_image: string;
+  home_about_image: string;
+  about_history_image: string;
 }
 export interface AboutBlock {
   about_paragraphs: string[];
@@ -68,6 +72,9 @@ const defaults: PageContent = {
     email: 'contact@osufutminna.com',
     address: 'Federal University of Technology, Minna, Niger State, Nigeria.',
     whatsapp_text: 'Offa WhatsApp community (official list managed by the union)',
+    home_hero_image: '/img/hero-students.jpg',
+    home_about_image: '/img/community.jpg',
+    about_history_image: '/img/cultural-day.jpg',
   },
   about: {
     about_paragraphs: [

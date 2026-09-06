@@ -47,6 +47,10 @@ export default function Home() {
   const { content } = useContent();
   const latestAnnouncements = content.announcements.slice(0, 3);
   const upcoming = content.events.filter((e) => e.status === 'upcoming').slice(0, 3);
+  // Layout photos are editable from Admin → Content → Site; fall back to the
+  // built-in photos until the union sets its own.
+  const heroSrc = content.site?.home_hero_image || heroImg;
+  const aboutSrc = content.site?.home_about_image || communityImg;
 
   return (
     <>
@@ -104,7 +108,7 @@ export default function Home() {
           {/* Hero image card */}
           <div className="relative mx-auto w-full max-w-md lg:max-w-none animate-fade-up" style={{ animationDelay: '120ms' }}>
             <div className="overflow-hidden rounded-3xl border border-white/20 shadow-2xl">
-              <img src={heroImg} alt="OSU FUTMinna students together" className="aspect-[4/3] w-full object-cover" />
+              <img src={heroSrc} alt="OSU FUTMinna students together" className="aspect-[4/3] w-full object-cover" />
             </div>
             <div className="absolute -bottom-5 -left-3 rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-lg sm:-left-6">
               <p className="text-[11px] font-bold uppercase tracking-wider text-fuchsia-700">Join the family</p>
@@ -134,7 +138,7 @@ export default function Home() {
         <div className="container-x grid items-center gap-10 lg:grid-cols-2 lg:gap-16">
           <div className="relative order-2 lg:order-1">
             <div className="overflow-hidden rounded-3xl shadow-soft">
-              <img src={communityImg} alt="Offa student community at FUTMinna" className="aspect-[4/3] w-full object-cover" />
+              <img src={aboutSrc} alt="Offa student community at FUTMinna" className="aspect-[4/3] w-full object-cover" />
             </div>
             <div className="absolute -bottom-5 right-4 rounded-2xl bg-gradient-to-br from-fuchsia-700 to-fuchsia-800 px-5 py-4 text-white shadow-lg">
               <p className="text-2xl font-extrabold leading-none">OSU</p>

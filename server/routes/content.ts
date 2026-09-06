@@ -37,6 +37,11 @@ export async function assembleContent() {
       email: b.contact_email || '',
       address: b.contact_address || '',
       whatsapp_text: b.whatsapp_text || '',
+      // Photo slots: admins can replace the photos baked into the layout by
+      // setting these in Content → Site. Empty → current built-in photo.
+      home_hero_image: b.home_hero_image || '/img/hero-students.jpg',
+      home_about_image: b.home_about_image || '/img/community.jpg',
+      about_history_image: b.about_history_image || '/img/cultural-day.jpg',
     },
     about: {
       about_paragraphs: readArr(b.about_paragraphs),
@@ -135,6 +140,9 @@ adminContentRouter.put(
       if (site.email !== undefined) await write('contact_email', String(site.email));
       if (site.address !== undefined) await write('contact_address', String(site.address));
       if (site.whatsapp_text !== undefined) await write('whatsapp_text', String(site.whatsapp_text));
+      if (site.home_hero_image !== undefined) await write('home_hero_image', String(site.home_hero_image || ''));
+      if (site.home_about_image !== undefined) await write('home_about_image', String(site.home_about_image || ''));
+      if (site.about_history_image !== undefined) await write('about_history_image', String(site.about_history_image || ''));
     }
     if (about) {
       if (about.about_paragraphs !== undefined) await write('about_paragraphs', JSON.stringify(about.about_paragraphs.map(String)));
