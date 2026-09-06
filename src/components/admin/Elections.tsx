@@ -9,6 +9,8 @@ interface Election {
   opens_at: string;
   closes_at: string;
   status: string;
+  results_mode?: string;
+  results_announce_at?: string | null;
   votes_cast: number;
 }
 interface Position {
@@ -43,6 +45,55 @@ function fmtDate(s: string) {
   return isNaN(d.getTime()) ? s : d.toLocaleString();
 }
 
+// datetime-local <-> UTC helpers (the server stores times as UTC ISO).
+function isoToLocalInput(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function localInputToIso(v: string): string {
+  return v ? new Date(v).toISOString() : '';
+}
+
+function ResultsReleasePicker({ value, onChange, announce, onAnnounce }: {
+  value: 'manual' | 'auto' | 'scheduled';
+  onChange: (v: 'manual' | 'auto' | 'scheduled') => void;
+  announce: string;
+  onAnnounce: (v: string) => void;
+}) {
+  const opts: { v: 'manual' | 'auto' | 'scheduled'; label: string; hint: string }[] = [
+    { v: 'manual', label: 'Manual', hint: 'Results stay sealed until an Electoral/Super admin presses “Publish results”.' },
+    { v: 'auto', label: 'Automatic at close', hint: 'Results appear on the public site the moment voting closes.' },
+    { v: 'scheduled', label: 'Scheduled', hint: 'Results appear automatically at a time you choose after closing.' },
+  ];
+  return (
+    <div>
+      <label className="label">Results release</label>
+      <div className="mt-1 grid gap-2 sm:grid-cols-3">
+        {opts.map((o) => (
+          <button
+            key={o.v}
+            type="button"
+            onClick={() => onChange(o.v)}
+            className={`rounded-xl border p-3 text-left transition ${value === o.v ? 'border-fuchsia-600 bg-fuchsia-50 ring-1 ring-fuchsia-300' : 'border-slate-200 bg-white hover:border-fuchsia-300'}`}
+          >
+            <p className={`text-sm font-bold ${value === o.v ? 'text-fuchsia-800' : 'text-slate-800'}`}>{o.label}</p>
+            <p className="mt-1 text-[11px] leading-snug text-slate-500">{o.hint}</p>
+          </button>
+        ))}
+      </div>
+      {value === 'scheduled' && (
+        <div className="mt-2">
+          <label className="label !mb-1">Announce results at (date &amp; time)</label>
+          <input type="datetime-local" className="input sm:max-w-xs" value={announce} onChange={(e) => onAnnounce(e.target.value)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ===========================================================================
 // Election management (list + create)
 // ===========================================================================
@@ -68,7 +119,10 @@ export default function AdminElections() {
     load();
   }, [load]);
 
-  const create = async (form: { name: string; description: string; opens_at: string; closes_at: string }) => {
+  const create = async (form: {
+    name: string; description: string; opens_at: string; closes_at: string;
+    results_mode: 'manual' | 'auto' | 'scheduled'; results_announce_at: string;
+  }) => {
     setError('');
     await api('/api/admin/elections', { method: 'POST', body: JSON.stringify(form) });
     setCreating(false);
@@ -118,16 +172,24 @@ export default function AdminElections() {
   );
 }
 
-function CreateElectionForm({ onCancel, onDone }: { onCancel: () => void; onDone: (f: { name: string; description: string; opens_at: string; closes_at: string }) => void }) {
+function CreateElectionForm({ onCancel, onDone }: { onCancel: () => void; onDone: (f: { name: string; description: string; opens_at: string; closes_at: string; results_mode: 'manual' | 'auto' | 'scheduled'; results_announce_at: string }) => void }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [opens_at, setOpensAt] = useState('');
   const [closes_at, setClosesAt] = useState('');
+  const [resultsMode, setResultsMode] = useState<'manual' | 'auto' | 'scheduled'>('manual');
+  const [announce, setAnnounce] = useState('');
   const [err, setErr] = useState('');
 
   const submit = () => {
     if (!name.trim() || !opens_at || !closes_at) return setErr('Name, opening and closing times are required.');
-    onDone({ name, description, opens_at: new Date(opens_at).toISOString(), closes_at: new Date(closes_at).toISOString() });
+    onDone({
+      name, description,
+      opens_at: new Date(opens_at).toISOString(),
+      closes_at: new Date(closes_at).toISOString(),
+      results_mode: resultsMode,
+      results_announce_at: resultsMode === 'scheduled' ? localInputToIso(announce) : '',
+    });
   };
 
   return (
@@ -151,6 +213,9 @@ function CreateElectionForm({ onCancel, onDone }: { onCancel: () => void; onDone
           <label className="label">Closes (date &amp; time)</label>
           <input type="datetime-local" className="input" value={closes_at} onChange={(e) => setClosesAt(e.target.value)} />
         </div>
+      </div>
+      <div className="mt-4">
+        <ResultsReleasePicker value={resultsMode} onChange={setResultsMode} announce={announce} onAnnounce={setAnnounce} />
       </div>
       <div className="mt-4 flex gap-2">
         <button className="btn btn-md btn-primary" onClick={submit}>Create election</button>
@@ -186,9 +251,63 @@ function ElectionManager({ election, onBack, onChanged }: { election: Election; 
         ))}
       </div>
 
+      {election.status !== 'RESULTS_PUBLISHED' && <ResultsReleaseSettings election={election} onChanged={onChanged} />}
+
       {view === 'positions' && <PositionsPanel election={election} />}
       {view === 'contestants' && <ContestantsPanel election={election} />}
       {view === 'results' && <ResultsPanel election={election} onChanged={onChanged} />}
+    </div>
+  );
+}
+
+// ---- Results release plan (editable until published) ----------------------
+function ResultsReleaseSettings({ election, onChanged }: { election: Election; onChanged: () => void }) {
+  const [mode, setMode] = useState<'manual' | 'auto' | 'scheduled'>(election.results_mode === 'auto' ? 'auto' : election.results_mode === 'scheduled' ? 'scheduled' : 'manual');
+  const [announce, setAnnounce] = useState<string>(isoToLocalInput(election.results_announce_at));
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+
+  const save = async () => {
+    setSaving(true); setMsg(''); setErr('');
+    try {
+      await api(`/api/admin/elections/${election.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          results_mode: mode,
+          results_announce_at: mode === 'scheduled' ? localInputToIso(announce) : '',
+        }),
+      });
+      setMsg('Saved. This plan applies when the election closes.');
+      onChanged();
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : 'Save failed.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const plan =
+    mode === 'auto' ? 'Results will appear automatically the moment voting closes.' :
+    mode === 'scheduled' ? `Results will appear automatically at ${fmtDate(localInputToIso(announce))} (must be after closing).` :
+    'Results stay sealed until an Electoral/Super admin presses “Publish results”.';
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="font-bold text-slate-900">How results will be released</h3>
+          <p className="mt-1 text-xs text-slate-500">{plan}</p>
+          {msg && <p className="mt-2 text-xs font-semibold text-emerald-700">{msg}</p>}
+          {err && <p className="mt-2 text-xs font-semibold text-rose-700">{err}</p>}
+        </div>
+      </div>
+      <div className="mt-3">
+        <ResultsReleasePicker value={mode} onChange={(m) => { setMode(m); setMsg(''); }} announce={announce} onAnnounce={setAnnounce} />
+      </div>
+      <button className="btn btn-md btn-primary mt-3" onClick={save} disabled={saving}>
+        {saving ? 'Saving…' : 'Save results plan'}
+      </button>
     </div>
   );
 }
@@ -353,7 +472,7 @@ function ContestantsPanel({ election }: { election: Election }) {
 
 // ---- Results --------------------------------------------------------------
 interface ResultsData {
-  election: { status: string; results_published_at: string | null };
+  election: { status: string; results_mode?: string; results_announce_at?: string | null; results_published_at: string | null };
   summary: { eligible_voters: number; votes_cast: number; turnout_percent: number };
   positions: (Position & { contestants: (Contestant & { votes: number })[] })[];
 }
@@ -400,13 +519,22 @@ function ResultsPanel({ election, onChanged }: { election: Election; onChanged: 
             <p className="text-xs text-slate-500">
               {data.summary.votes_cast} of {data.summary.eligible_voters} eligible voted · {data.summary.turnout_percent}% turnout
             </p>
+            <p className="mt-1 text-[11px] text-slate-400">
+              {data.election.results_mode === 'auto'
+                ? 'Release plan: automatic — results appear the moment voting closes.'
+                : data.election.results_mode === 'scheduled'
+                  ? `Release plan: automatic at ${fmtDate(data.election.results_announce_at || '')}.`
+                  : 'Release plan: manual — press Publish when the committee is ready (only Super/Electoral admins can).'}
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             {election.status === 'OPEN' && (
               <button className="btn btn-md btn-outline" onClick={() => setStatus('CLOSED')}>Close election</button>
             )}
             {!published && (
-              <button className="btn btn-md btn-primary" onClick={() => setStatus('RESULTS_PUBLISHED')}>Publish results</button>
+              <button className="btn btn-md btn-primary" onClick={() => setStatus('RESULTS_PUBLISHED')}>
+                {data.election.results_mode === 'manual' ? 'Publish results' : 'Publish now (override plan)'}
+              </button>
             )}
             {published && <span className="chip bg-fuchsia-100 text-fuchsia-800">Published ✓</span>}
           </div>

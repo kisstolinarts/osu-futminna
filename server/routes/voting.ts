@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { prepare, tx } from '../dbCloud';
 import { audit } from '../lib/audit';
 import { ah } from '../lib/asyncHandler';
+import { refreshElectionStatuses } from '../lib/electionStatus';
 import { requireStudent } from '../middleware/auth';
 
 export const votingRouter = Router();
@@ -46,10 +47,7 @@ votingRouter.get(
   ah(async (req, res) => {
     const student = (req as any).student as { id: number; status: string };
 
-    // Refresh election statuses that have crossed their time boundary.
-    const nowIso = new Date().toISOString();
-    await prepare(`UPDATE elections SET status = 'OPEN' WHERE status = 'SCHEDULED' AND opens_at <= ?`).run(nowIso);
-    await prepare(`UPDATE elections SET status = 'CLOSED' WHERE status = 'OPEN' AND closes_at <= ?`).run(nowIso);
+    await refreshElectionStatuses();
 
     const open = await openElectionNow();
     const all = await prepare(`SELECT id, name, slug, description, opens_at, closes_at, status, results_published_at FROM elections WHERE status != 'DRAFT' ORDER BY opens_at DESC LIMIT 10`).all();
@@ -102,9 +100,7 @@ votingRouter.post(
     }
 
     // 2. Election currently open (server time decides, never the client).
-    const nowIso = new Date().toISOString();
-    await prepare(`UPDATE elections SET status = 'OPEN' WHERE status = 'SCHEDULED' AND opens_at <= ?`).run(nowIso);
-    await prepare(`UPDATE elections SET status = 'CLOSED' WHERE status = 'OPEN' AND closes_at <= ?`).run(nowIso);
+    await refreshElectionStatuses();
     const election = await openElectionNow();
     if (!election) {
       return res.status(403).json({ error: 'There is no election open right now.' });

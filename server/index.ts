@@ -15,6 +15,7 @@ import { adminElectionsRouter, publicElectionsRouter } from './routes/elections'
 import { votingRouter } from './routes/voting';
 import { publicContentRouter, adminContentRouter, uploadsDir } from './routes/content';
 import { seedContentDefaults } from './seedContent';
+import { refreshElectionStatuses } from './lib/electionStatus';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -81,6 +82,12 @@ async function main() {
   app.listen(config.port, '0.0.0.0', () => {
     console.log(`OSU API listening on http://0.0.0.0:${config.port}`);
   });
+  // Election statuses (open / close / publish) roll forward on their own
+  // even when the site is quiet — checked once at boot and every 30s.
+  await refreshElectionStatuses().catch((err) => console.error('election refresh failed', err));
+  setInterval(() => {
+    refreshElectionStatuses().catch((err) => console.error('election refresh failed', err));
+  }, 30_000).unref();
 }
 
 main().catch((err) => {

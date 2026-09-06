@@ -3,12 +3,14 @@ import crypto from 'node:crypto';
 import { prepare } from '../dbCloud';
 import { audit } from '../lib/audit';
 import { ah } from '../lib/asyncHandler';
+import { refreshElectionStatuses } from '../lib/electionStatus';
 import { requireAdmin, requireRole } from '../middleware/auth';
 
 export const adminElectionsRouter = Router();
 adminElectionsRouter.use(requireAdmin);
 
 const STATUSES = ['DRAFT', 'SCHEDULED', 'OPEN', 'CLOSED', 'RESULTS_PUBLISHED'] as const;
+const RESULTS_MODES = ['manual', 'auto', 'scheduled'] as const;
 
 function cleanInt(v: unknown): number | null {
   const n = Number(v);
@@ -21,6 +23,7 @@ function cleanInt(v: unknown): number | null {
 adminElectionsRouter.get(
   '/',
   ah(async (_req, res) => {
+    await refreshElectionStatuses();
     const elections = await prepare(`SELECT * FROM elections ORDER BY opens_at DESC`).all();
     const stats = (await prepare(
       `SELECT election_id, COUNT(*) AS votes_cast FROM election_participation GROUP BY election_id`,
@@ -39,9 +42,19 @@ adminElectionsRouter.post(
   '/',
   requireRole('SUPER_ADMIN', 'ELECTORAL_ADMIN'),
   ah(async (req, res) => {
-    const { name, description, opens_at, closes_at } = req.body ?? {};
+    await refreshElectionStatuses();
+    const { name, description, opens_at, closes_at, results_mode, results_announce_at } = req.body ?? {};
     if (!name || !opens_at || !closes_at) return res.status(400).json({ error: 'Name, opening and closing times are required.' });
     if (new Date(closes_at) <= new Date(opens_at)) return res.status(400).json({ error: 'Closing time must be after opening time.' });
+
+    let mode = String(results_mode || 'manual');
+    if (!RESULTS_MODES.includes(mode as any)) mode = 'manual';
+    let announce = mode === 'scheduled' && results_announce_at ? String(results_announce_at) : null;
+    if (announce && new Date(announce).getTime() <= new Date(closes_at).getTime()) {
+      // A results time that is not after closing would try to release results
+      // before voting ends — not allowed.
+      return res.status(400).json({ error: 'The results announcement time must be after the election closes.' });
+    }
 
     const slugBase = String(name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     const slug = slugBase + '-' + Math.random().toString(36).slice(2, 6);
@@ -49,13 +62,15 @@ adminElectionsRouter.post(
     const now = new Date();
     const status = new Date(opens_at) > now ? 'SCHEDULED' : new Date(closes_at) < now ? 'CLOSED' : 'OPEN';
 
-    const info = await prepare(`INSERT INTO elections (name, slug, description, opens_at, closes_at, status, created_by_admin_id) VALUES (?,?,?,?,?,?,?)`).run(
+    const info = await prepare(`INSERT INTO elections (name, slug, description, opens_at, closes_at, status, results_mode, results_announce_at, created_by_admin_id) VALUES (?,?,?,?,?,?,?,?,?)`).run(
       String(name).trim(),
       slug,
       String(description || '').trim(),
       String(opens_at),
       String(closes_at),
       status,
+      mode,
+      announce,
       (req as any).admin.id,
     );
     const id = Number(info.lastInsertRowid);
@@ -66,11 +81,73 @@ adminElectionsRouter.post(
   }),
 );
 
+// Update an election's details / results-release plan. Times can only be
+// changed while the election is still DRAFT or SCHEDULED; the results-release
+// rule can be changed any time before results are published.
+adminElectionsRouter.patch(
+  '/:id',
+  requireRole('SUPER_ADMIN', 'ELECTORAL_ADMIN'),
+  ah(async (req, res) => {
+    await refreshElectionStatuses();
+    const id = cleanInt(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'Invalid election id.' });
+    const election = (await prepare(`SELECT * FROM elections WHERE id = ?`).get(id)) as any;
+    if (!election) return res.status(404).json({ error: 'Election not found.' });
+    if (election.status === 'RESULTS_PUBLISHED') return res.status(400).json({ error: 'Results are already published — this election can no longer be edited.' });
+
+    const { name, description, opens_at, closes_at, results_mode, results_announce_at } = req.body ?? {};
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    const notes: string[] = [];
+
+    const changeTime = opens_at !== undefined || closes_at !== undefined;
+    if (changeTime && election.status !== 'DRAFT' && election.status !== 'SCHEDULED') {
+      return res.status(400).json({ error: 'Opening/closing times can only be changed while the election is DRAFT or SCHEDULED.' });
+    }
+
+    if (name !== undefined) { sets.push('name = ?'); vals.push(String(name).trim()); notes.push('name'); }
+    if (description !== undefined) { sets.push('description = ?'); vals.push(String(description).trim()); notes.push('description'); }
+
+    let newOpens = election.opens_at;
+    let newCloses = election.closes_at;
+    if (opens_at !== undefined) { sets.push('opens_at = ?'); vals.push(String(opens_at)); newOpens = String(opens_at); notes.push('opens_at'); }
+    if (closes_at !== undefined) { sets.push('closes_at = ?'); vals.push(String(closes_at)); newCloses = String(closes_at); notes.push('closes_at'); }
+    if (changeTime && new Date(newCloses).getTime() <= new Date(newOpens).getTime()) {
+      return res.status(400).json({ error: 'Closing time must be after opening time.' });
+    }
+
+    let mode = election.results_mode;
+    if (results_mode !== undefined) {
+      if (!RESULTS_MODES.includes(String(results_mode) as any)) return res.status(400).json({ error: 'Invalid results mode.' });
+      mode = String(results_mode); sets.push('results_mode = ?'); vals.push(mode); notes.push('results_mode=' + mode);
+    }
+    if (results_announce_at !== undefined || (results_mode !== undefined && mode !== 'scheduled')) {
+      const announce = mode === 'scheduled' && results_announce_at ? String(results_announce_at) : null;
+      if (announce && new Date(announce).getTime() <= new Date(newCloses).getTime()) {
+        return res.status(400).json({ error: 'The results announcement time must be after the election closes.' });
+      }
+      sets.push('results_announce_at = ?'); vals.push(announce); notes.push('results_announce_at');
+    }
+
+    if (sets.length === 0) return res.status(400).json({ error: 'Nothing to update.' });
+    await prepare(`UPDATE elections SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
+
+    if (changeTime && (election.status === 'DRAFT' || election.status === 'SCHEDULED')) {
+      await refreshElectionStatuses();
+    }
+
+    const admin = (req as any).admin as { id: number; name: string };
+    await audit({ actorType: 'admin', actorId: admin.id, actorLabel: admin.name, action: 'election_updated', entityType: 'election', entityId: id, description: `Election \"${election.name}\" updated (${notes.join(', ')})` });
+    res.json({ ok: true });
+  }),
+);
+
 // Manual status change (open/close/publish results) — SUPER_ADMIN / ELECTORAL only.
 adminElectionsRouter.patch(
   '/:id/status',
   requireRole('SUPER_ADMIN', 'ELECTORAL_ADMIN'),
   ah(async (req, res) => {
+    await refreshElectionStatuses();
     const id = cleanInt(req.params.id);
     const { status } = req.body ?? {};
     if (id === null) return res.status(400).json({ error: 'Invalid election id.' });
@@ -223,6 +300,7 @@ adminElectionsRouter.get(
   '/:id/results',
   requireRole('SUPER_ADMIN', 'ELECTORAL_ADMIN', 'RESULTS_OBSERVER'),
   ah(async (req, res) => {
+    await refreshElectionStatuses();
     const id = cleanInt(req.params.id);
     if (id === null) return res.status(400).json({ error: 'Invalid election id.' });
     const election = (await prepare(`SELECT * FROM elections WHERE id = ?`).get(id)) as any;
@@ -262,7 +340,8 @@ export const publicElectionsRouter = Router();
 publicElectionsRouter.get(
   '/',
   ah(async (_req, res) => {
-    const elections = await prepare(`SELECT id, name, slug, description, opens_at, closes_at, status, results_published_at FROM elections ORDER BY opens_at DESC`).all();
+    await refreshElectionStatuses();
+    const elections = await prepare(`SELECT id, name, slug, description, opens_at, closes_at, status, results_mode, results_announce_at, results_published_at FROM elections ORDER BY opens_at DESC`).all();
     res.json({ elections });
   }),
 );
@@ -270,7 +349,8 @@ publicElectionsRouter.get(
 publicElectionsRouter.get(
   '/:slug',
   ah(async (req, res) => {
-    const election = (await prepare(`SELECT id, name, slug, description, opens_at, closes_at, status, results_published_at FROM elections WHERE slug = ?`).get(req.params.slug)) as any;
+    await refreshElectionStatuses();
+    const election = (await prepare(`SELECT id, name, slug, description, opens_at, closes_at, status, results_mode, results_announce_at, results_published_at FROM elections WHERE slug = ?`).get(req.params.slug)) as any;
     if (!election) return res.status(404).json({ error: 'Election not found.' });
 
     const positionRows = (await prepare(`SELECT id, name, description, display_order FROM election_positions WHERE election_id = ? AND active = 1 ORDER BY display_order, id`).all(election.id)) as any[];
@@ -289,6 +369,7 @@ publicElectionsRouter.get(
 publicElectionsRouter.get(
   '/:slug/results',
   ah(async (req, res) => {
+    await refreshElectionStatuses();
     const election = (await prepare(`SELECT * FROM elections WHERE slug = ?`).get(req.params.slug)) as any;
     if (!election) return res.status(404).json({ error: 'Election not found.' });
     if (election.status !== 'RESULTS_PUBLISHED') {

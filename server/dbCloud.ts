@@ -185,6 +185,13 @@ export async function migrate(): Promise<void> {
       closes_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'DRAFT'
         CHECK (status IN ('DRAFT','SCHEDULED','OPEN','CLOSED','RESULTS_PUBLISHED')),
+      -- How results are released once voting closes:
+      --   manual    -> stay sealed until an admin (SUPER_ADMIN / ELECTORAL) presses Publish.
+      --   auto      -> appear automatically the moment voting closes.
+      --   scheduled -> appear automatically at results_announce_at.
+      results_mode TEXT NOT NULL DEFAULT 'manual'
+        CHECK (results_mode IN ('manual','auto','scheduled')),
+      results_announce_at TEXT,
       results_published_at TEXT,
       created_by_admin_id INTEGER REFERENCES admins(id),
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -324,5 +331,15 @@ export async function migrate(): Promise<void> {
   if (!studentCols.includes('must_change_password')) {
     await exec(`ALTER TABLE students ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`);
     console.log('migrated: students.must_change_password');
+  }
+
+  const electionCols = (await prepare(`PRAGMA table_info(elections)`).all()).map((c) => String(c.name));
+  if (!electionCols.includes('results_mode')) {
+    await exec(`ALTER TABLE elections ADD COLUMN results_mode TEXT NOT NULL DEFAULT 'manual'`);
+    console.log('migrated: elections.results_mode');
+  }
+  if (!electionCols.includes('results_announce_at')) {
+    await exec(`ALTER TABLE elections ADD COLUMN results_announce_at TEXT`);
+    console.log('migrated: elections.results_announce_at');
   }
 }
