@@ -18,6 +18,12 @@ interface PubResults {
   summary: { eligible_voters: number; votes_cast: number; turnout_percent: number };
   positions: { name: string; contestants: { id: number; full_name: string; level: string | null; votes: number }[] }[];
 }
+interface PubCandidate {
+  id: number; full_name: string; level: string | null; manifesto: string;
+}
+interface PubPosition {
+  id: number; name: string; description: string; contestants: PubCandidate[];
+}
 
 const STATUS_LABEL: Record<string, string> = {
   SCHEDULED: 'Scheduled',
@@ -44,17 +50,30 @@ const safeguards = [
 export default function Election() {
   const [elections, setElections] = useState<PubElection[]>([]);
   const [results, setResults] = useState<PubResults | null>(null);
+  const [detail, setDetail] = useState<{ election: PubElection; positions: PubPosition[] } | null>(null);
   const [statusErr, setStatusErr] = useState('');
 
   useEffect(() => {
     (async () => {
       try {
         const res = await fetch('/api/elections').then((r) => r.json());
-        setElections(res.elections || []);
-        const published = (res.elections || []).find((e: PubElection) => e.status === 'RESULTS_PUBLISHED');
+        const list: PubElection[] = res.elections || [];
+        setElections(list);
+        const published = list.find((e: PubElection) => e.status === 'RESULTS_PUBLISHED');
         if (published) {
           const rr = await fetch(`/api/elections/${published.slug}/results`).then((r) => r.json());
           setResults(rr);
+        }
+        // Show the real candidates for the upcoming/open election so members
+        // can read who is contesting before voting opens.
+        const preview = list.find((e: PubElection) => e.status === 'SCHEDULED' || e.status === 'OPEN');
+        if (preview) {
+          try {
+            const det = await fetch(`/api/elections/${preview.slug}`).then((r) => r.json());
+            if (det && det.election && Array.isArray(det.positions)) {
+              setDetail({ election: preview, positions: det.positions.filter((p: PubPosition) => p.contestants.length > 0) });
+            }
+          } catch { /* preview is optional */ }
         }
       } catch {
         setStatusErr('Could not load election status.');
@@ -138,6 +157,38 @@ export default function Election() {
         </div>
       </section>
 
+      {/* Meet the candidates (real list for scheduled/open elections) */}
+      {detail && detail.positions.length > 0 && (
+        <section id="candidates" className="bg-slate-50 py-16 sm:py-20">
+          <div className="container-x">
+            <SectionHeading
+              eyebrow="Meet the candidates"
+              title={detail.election.name}
+              intro="These are the candidates on the ballot. One member, one choice per position."
+              align="center"
+            />
+            <div className="mt-10 grid gap-4 md:grid-cols-2">
+              {detail.positions.map((pos) => (
+                <div key={pos.id} className="card p-5">
+                  <h3 className="text-base font-extrabold text-slate-900">{pos.name}</h3>
+                  <ul className="mt-3 space-y-2">
+                    {pos.contestants.map((c) => (
+                      <li key={c.id} className="flex items-start justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2">
+                        <div>
+                          <p className="text-sm font-bold text-slate-800">{c.full_name}</p>
+                          {c.manifesto && <p className="text-xs italic text-slate-500">“{c.manifesto}”</p>}
+                          {c.level && <p className="text-[11px] uppercase tracking-wide text-slate-400">{c.level}</p>}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* How it works */}
       <section className="section-pad pt-0 sm:pt-0">
         <div className="container-x">
@@ -161,9 +212,11 @@ export default function Election() {
         </div>
       </section>
 
-      {/* Positions preview */}
+      {/* Positions preview — hidden while the real candidate list is shown */}
       <section className="bg-white py-16 sm:py-20">
         <div className="container-x">
+          {!detail && (
+          <>
           <SectionHeading
             eyebrow="Positions"
             title="Offices you vote for"
@@ -185,6 +238,8 @@ export default function Election() {
           <p className="mt-6 text-center text-sm text-slate-400">
             Contestant cards with photos and manifestos appear here when nominations open.
           </p>
+          </>
+          )}
         </div>
       </section>
 
